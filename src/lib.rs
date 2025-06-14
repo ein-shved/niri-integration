@@ -24,6 +24,7 @@ use std::{
 
 pub mod error;
 mod kitty;
+mod pstree;
 
 /// Top-level arguments structure
 #[derive(Parser, Debug)]
