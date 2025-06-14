@@ -14,7 +14,7 @@ use error::Result;
 use niri_ipc::{Request, Response, socket::Socket};
 use regex;
 use std::ffi::OsString;
-use std::fs::{read_link, File};
+use std::fs::{File, read_link};
 use std::io::BufRead;
 use std::str;
 use std::str::FromStr;
@@ -90,18 +90,32 @@ pub enum Command {
     #[command(about, long_about)]
     Env,
 
+    /// Vim-related commands.
+    #[command(subcommand, about, long_about)]
+    Vim(Vim),
+}
+
+#[derive(Subcommand, Debug, Clone, Default)]
+#[command(about, long_about)]
+pub enum Vim {
     /// Run new vim instance.
     ///
     /// If current focused window have usable environment data (e.g. kitty
     /// window) - the newly running window will inherit this environment (e.g. cwd).
     #[command(about, long_about)]
-    Vim,
+    #[default]
+    Run,
+    /// Synchronise vim window size and offset with its content
+    ///
+    /// This designed to be called automatically by vim itself
+    Sync,
 }
 
 #[derive(Default)]
 struct LaunchingData {
     pub env: HashMap<String, String>,
     pub cwd: Option<String>,
+    pub base_window: Option<niri_ipc::Window>,
 }
 
 impl Launcher {
@@ -116,7 +130,8 @@ impl Launcher {
             Command::Test => Self::run_test,
             Command::Kitty => Self::run_kitty,
             Command::Env => Self::print_env,
-            Command::Vim => Self::run_vim,
+            Command::Vim(Vim::Run) => Self::run_vim,
+            Command::Vim(Vim::Sync) => Self::sync_vim,
         };
 
         runner(self.get_launching_data(&mut socket))
@@ -148,6 +163,7 @@ impl Launcher {
             io::ErrorKind::NotFound,
             "No focused niri window",
         ))?;
+        let window_c = window.clone();
         let class = window.app_id.ok_or(io::Error::new(
             io::ErrorKind::NotFound,
             "Focused niri window does not have class",
@@ -162,6 +178,7 @@ impl Launcher {
                 format!("Can not get launching data from {class}"),
             ))?
         }
+        .map(|launching_data| launching_data.set_window(Some(window_c)))
     }
 
     fn get_launching_data(&self, socket: &mut Socket) -> LaunchingData {
@@ -219,7 +236,6 @@ impl Launcher {
                     launching_data
                 }
             });
-
         let Ok(cwd) = PathBuf::from_str(&format!("/proc/{pid}/cwd"));
         let cwd = read_link(&cwd)
             .ok()
@@ -266,6 +282,22 @@ impl Launcher {
         Err(proc.exec().into())
     }
 
+    fn sync_vim(data: LaunchingData) -> Result<()> {
+        let mut vim = vim::Vim::new(
+            data.base_window
+                .ok_or(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "No window provided",
+                ))?
+                .pid
+                .ok_or(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Unknown pid of window",
+                ))?,
+        )?;
+        vim.test()
+    }
+
     fn find_kitty_focused_window(
         windows: Vec<kitty::OsWindow>,
     ) -> Option<kitty::Window> {
@@ -285,10 +317,7 @@ impl Launcher {
         None
     }
 
-    fn get_base_window(
-        &self,
-        socket: &mut Socket,
-    ) -> Option<niri_ipc::Window> {
+    fn get_base_window(&self, socket: &mut Socket) -> Option<niri_ipc::Window> {
         if let Some(id) = self.window {
             if let Response::Windows(windows) =
                 socket.send(Request::Windows).unwrap().unwrap()
@@ -374,5 +403,10 @@ impl LaunchingData {
         I: Iterator<Item = (K, V)>,
     {
         self.clear_env().add_envs(it)
+    }
+
+    pub fn set_window(mut self, window: Option<niri_ipc::Window>) -> Self {
+        self.base_window = window;
+        self
     }
 }
