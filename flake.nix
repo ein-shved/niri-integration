@@ -3,6 +3,8 @@
     A glue-utility between niri and environment like kitty and vim
   '';
 
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+
   outputs =
     { nixpkgs, flake-utils, ... }:
     flake-utils.lib.eachDefaultSystem (
