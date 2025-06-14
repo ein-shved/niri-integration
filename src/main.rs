@@ -1,7 +1,6 @@
-use std::io;
-use niri_integration::{Launcher, Parser};
+use niri_integration::{Launcher, Parser, error::Result};
 
-fn main() -> io::Result<()> {
+fn main() -> Result<()> {
     let args = Launcher::parse();
 
     args.run()

@@ -10,6 +10,7 @@
 
 use clap::Subcommand;
 pub use clap::{Parser, ValueEnum};
+use error::Result;
 use niri_ipc::{Request, Response, socket::Socket};
 use regex;
 use std::ffi::OsString;
@@ -21,6 +22,7 @@ use std::{
     collections::HashMap, io, os::unix::process::CommandExt, path::PathBuf,
 };
 
+pub mod error;
 mod kitty;
 
 /// Top-level arguments structure
@@ -102,13 +104,13 @@ struct LaunchingData {
 
 impl Launcher {
     /// Run chosen subcommand
-    pub fn run(self) -> io::Result<()> {
+    pub fn run(self) -> Result<()> {
         let mut socket = if let Some(path) = self.path.as_ref() {
             Socket::connect_to(path)?
         } else {
             Socket::connect()?
         };
-        let runner: fn(LaunchingData) -> io::Result<()> = match self.command {
+        let runner: fn(LaunchingData) -> Result<()> = match self.command {
             Command::Test => Self::run_test,
             Command::Kitty => Self::run_kitty,
             Command::Env => Self::print_env,
@@ -118,7 +120,7 @@ impl Launcher {
         runner(self.get_launching_data(&mut socket))
     }
 
-    fn get_socket(&self, pid: i32) -> io::Result<kitty::KittySocket> {
+    fn get_socket(&self, pid: i32) -> Result<kitty::KittySocket> {
         let pidre = regex::Regex::new(r"\{pid\}").unwrap();
         let envre = regex::Regex::new(r"\$\{([^\{\}\s]*)\}").unwrap();
 
@@ -131,13 +133,15 @@ impl Launcher {
 
         let path = pidre.replace_all(&path, format!("{pid}"));
 
-        kitty::KittySocket::connect(PathBuf::from(path.to_string()))
+        Ok(kitty::KittySocket::connect(PathBuf::from(
+            path.to_string(),
+        ))?)
     }
 
     fn get_launching_data_no_default(
         &self,
         socket: &mut Socket,
-    ) -> io::Result<LaunchingData> {
+    ) -> Result<LaunchingData> {
         let window = self.get_base_window(socket).ok_or(io::Error::new(
             io::ErrorKind::NotFound,
             "No focused niri window",
@@ -154,7 +158,7 @@ impl Launcher {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 format!("Can not get launching data from {class}"),
-            ))
+            ))?
         }
     }
 
@@ -170,7 +174,7 @@ impl Launcher {
     fn get_launching_data_from_kitty(
         &self,
         pid: Option<i32>,
-    ) -> io::Result<LaunchingData> {
+    ) -> Result<LaunchingData> {
         let pid = pid.ok_or(io::Error::new(
             io::ErrorKind::NotFound,
             "Focused niri window does not have pid",
@@ -190,7 +194,7 @@ impl Launcher {
     fn get_launching_data_from_vim(
         &self,
         pid: Option<i32>,
-    ) -> io::Result<LaunchingData> {
+    ) -> Result<LaunchingData> {
         let pid = pid.ok_or(io::Error::new(
             io::ErrorKind::NotFound,
             "Focused niri window does not have pid",
@@ -221,11 +225,11 @@ impl Launcher {
         Ok(launching_data.maybe_cwd(cwd))
     }
 
-    fn run_test(_: LaunchingData) -> io::Result<()> {
+    fn run_test(_: LaunchingData) -> Result<()> {
         Ok(())
     }
 
-    fn run_kitty(data: LaunchingData) -> io::Result<()> {
+    fn run_kitty(data: LaunchingData) -> Result<()> {
         let mut proc = std::process::Command::new("kitty");
 
         data.env.into_iter().fold(&mut proc, |proc, (name, val)| {
@@ -236,17 +240,17 @@ impl Launcher {
             proc.arg("-d").arg(format!("{}", workdir));
         });
 
-        Err(proc.exec())
+        Err(proc.exec().into())
     }
 
-    fn print_env(launching_data: LaunchingData) -> io::Result<()> {
+    fn print_env(launching_data: LaunchingData) -> Result<()> {
         for (name, val) in launching_data.env {
             println!("{name}=\"{val}\"");
         }
         Ok(())
     }
 
-    fn run_vim(data: LaunchingData) -> io::Result<()> {
+    fn run_vim(data: LaunchingData) -> Result<()> {
         let mut proc = std::process::Command::new("neovide");
 
         data.env
@@ -257,7 +261,7 @@ impl Launcher {
             proc.current_dir(workdir);
         });
 
-        Err(proc.exec())
+        Err(proc.exec().into())
     }
 
     fn find_kitty_focused_window(
