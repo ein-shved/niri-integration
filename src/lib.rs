@@ -283,7 +283,8 @@ impl Launcher {
         Err(proc.exec().into())
     }
 
-    fn sync_vim(data: LaunchingData, _: &mut Socket) -> Result<()> {
+    fn sync_vim(data: LaunchingData, soc: &mut Socket) -> Result<()> {
+        let win = data.base_window.clone();
         let mut vim = vim::Vim::new(
             data.base_window
                 .ok_or(io::Error::new(
@@ -296,7 +297,8 @@ impl Launcher {
                     "Unknown pid of window",
                 ))?,
         )?;
-        vim.test()
+        vim.test()?;
+        vim.sync_width(&win.unwrap(), soc)
     }
 
     fn find_kitty_focused_window(
