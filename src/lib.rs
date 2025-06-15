@@ -126,15 +126,16 @@ impl Launcher {
         } else {
             Socket::connect()?
         };
-        let runner: fn(LaunchingData) -> Result<()> = match self.command {
-            Command::Test => Self::run_test,
-            Command::Kitty => Self::run_kitty,
-            Command::Env => Self::print_env,
-            Command::Vim(Vim::Run) => Self::run_vim,
-            Command::Vim(Vim::Sync) => Self::sync_vim,
-        };
+        let runner: fn(LaunchingData, &mut Socket) -> Result<()> =
+            match self.command {
+                Command::Test => Self::run_test,
+                Command::Kitty => Self::run_kitty,
+                Command::Env => Self::print_env,
+                Command::Vim(Vim::Run) => Self::run_vim,
+                Command::Vim(Vim::Sync) => Self::sync_vim,
+            };
 
-        runner(self.get_launching_data(&mut socket))
+        runner(self.get_launching_data(&mut socket), &mut socket)
     }
 
     fn get_socket(&self, pid: i32) -> Result<kitty::KittySocket> {
@@ -243,11 +244,11 @@ impl Launcher {
         Ok(launching_data.maybe_cwd(cwd))
     }
 
-    fn run_test(_: LaunchingData) -> Result<()> {
+    fn run_test(_: LaunchingData, _: &mut Socket) -> Result<()> {
         Ok(())
     }
 
-    fn run_kitty(data: LaunchingData) -> Result<()> {
+    fn run_kitty(data: LaunchingData, _: &mut Socket) -> Result<()> {
         let mut proc = std::process::Command::new("kitty");
 
         data.env.into_iter().fold(&mut proc, |proc, (name, val)| {
@@ -261,14 +262,14 @@ impl Launcher {
         Err(proc.exec().into())
     }
 
-    fn print_env(launching_data: LaunchingData) -> Result<()> {
+    fn print_env(launching_data: LaunchingData, _: &mut Socket) -> Result<()> {
         for (name, val) in launching_data.env {
             println!("{name}=\"{val}\"");
         }
         Ok(())
     }
 
-    fn run_vim(data: LaunchingData) -> Result<()> {
+    fn run_vim(data: LaunchingData, _: &mut Socket) -> Result<()> {
         let mut proc = std::process::Command::new("neovide");
 
         data.env
@@ -282,7 +283,7 @@ impl Launcher {
         Err(proc.exec().into())
     }
 
-    fn sync_vim(data: LaunchingData) -> Result<()> {
+    fn sync_vim(data: LaunchingData, _: &mut Socket) -> Result<()> {
         let mut vim = vim::Vim::new(
             data.base_window
                 .ok_or(io::Error::new(
