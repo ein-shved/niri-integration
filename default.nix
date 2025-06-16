@@ -14,5 +14,11 @@ rustPlatform.buildRustPackage {
     );
     path = ./.;
   };
-  cargoLock.lockFile = ./Cargo.lock;
+  cargoLock = {
+    lockFile = ./Cargo.lock;
+    outputHashes = {
+      "niri-ipc-25.5.1" = "sha256-iEuavzHql6dd71pKIGPOH2VqOxHDgPVlUGIj0qoO964=";
+    };
+  };
+  meta.mainProgram = "niri-integration";
 }

@@ -109,6 +109,9 @@ pub enum Vim {
     ///
     /// This designed to be called automatically by vim itself
     Sync,
+
+    /// Shift vim window if it can not fit screen size
+    Shift,
 }
 
 #[derive(Default)]
@@ -133,6 +136,7 @@ impl Launcher {
                 Command::Env => Self::print_env,
                 Command::Vim(Vim::Run) => Self::run_vim,
                 Command::Vim(Vim::Sync) => Self::sync_vim,
+                Command::Vim(Vim::Shift) => Self::shift_vim,
             };
 
         runner(self.get_launching_data(&mut socket), &mut socket)
@@ -283,10 +287,10 @@ impl Launcher {
         Err(proc.exec().into())
     }
 
-    fn sync_vim(data: LaunchingData, soc: &mut Socket) -> Result<()> {
-        let win = data.base_window.clone();
-        let mut vim = vim::Vim::new(
+    fn get_vim(data: &LaunchingData) -> Result<vim::Vim> {
+        vim::Vim::new(
             data.base_window
+                .as_ref()
                 .ok_or(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "No window provided",
@@ -296,9 +300,19 @@ impl Launcher {
                     io::ErrorKind::InvalidData,
                     "Unknown pid of window",
                 ))?,
-        )?;
+        )
+    }
+
+    fn sync_vim(data: LaunchingData, soc: &mut Socket) -> Result<()> {
+        let mut vim = Self::get_vim(&data)?;
         vim.test()?;
-        vim.sync_width(&win.unwrap(), soc)
+        vim.sync_width(&data.base_window.unwrap(), soc)
+    }
+
+    fn shift_vim(data: LaunchingData, soc: &mut Socket) -> Result<()> {
+        let mut vim = Self::get_vim(&data)?;
+        vim.test()?;
+        vim.shift(&data.base_window.unwrap(), soc)
     }
 
     fn find_kitty_focused_window(

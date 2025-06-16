@@ -1,5 +1,5 @@
 use super::{
-    error::Result,
+    error::{Error, Result},
     pstree::{ProcessTreeNode, build_process_tree},
 };
 use neovim_lib::{Neovim, NeovimApi, Session, neovim_api::Window};
@@ -54,8 +54,38 @@ impl WinColumn {
         )
     }
 
-    fn add_win(&mut self, win: Window) {
+    pub fn add_win(&mut self, win: Window) {
         self.windows.push(Win::new(win));
+    }
+
+    pub fn increase_wins_columns(&mut self) {
+        for win in &mut self.windows {
+            win.add_to_column();
+        }
+    }
+
+    pub fn add_other(&mut self, other: &mut WinColumn) {
+        // Same columns - do nothing
+        if self.start == other.start && self.end == other.end {
+        }
+        // New - inside other
+        else if self.start <= other.start && self.end >= other.end {
+            // Shrink current column
+            self.start = other.start;
+            self.end = other.end;
+            // Count new column in windows
+            self.increase_wins_columns();
+        }
+        // Current - inside other
+        else if self.start >= other.start && self.end <= other.end {
+            // Count current column in new windows
+            other.increase_wins_columns();
+        }
+        // Other cases can not be handled correctly
+        else {
+        }
+
+        self.windows.append(&mut other.windows);
     }
 }
 
@@ -128,15 +158,15 @@ impl Vim {
 
         // For each window - create column record and find the place to store it in columns vector.
         for win in wins {
-            let mut column = WinColumn::from_window(win, nvim)?;
+            let mut new_column = WinColumn::from_window(win, nvim)?;
             let mut place_to = Some(columns.len());
-            for (i, c) in columns.iter_mut().enumerate() {
+            for (i, cur_column) in columns.iter_mut().enumerate() {
                 // Current last less then new first - go next
-                if c.end <= column.start {
+                if cur_column.end <= new_column.start {
                     continue;
                 }
                 // New last less then current first - place new before current
-                if column.end <= c.start {
+                if new_column.end <= cur_column.start {
                     // Place before
                     place_to = Some(i);
                     break;
@@ -144,29 +174,40 @@ impl Vim {
                 // Columns intersects.
 
                 // First option - when one column is subcolumn of another.
-                // Starts are the same - shrink to minimal size
-                if c.start == column.start {
-                    c.end = std::cmp::min(column.end, c.end);
+                // Starts are the same - shrink current and drop new column
+                if cur_column.start == new_column.start {
+                    cur_column.add_other(&mut new_column);
                     place_to = None;
                     break;
                 }
                 // Ends are the same - shrink current to start of new and place new after
-                if c.end == column.end {
-                    c.end = std::cmp::min(c.end, column.start);
+                if cur_column.end == new_column.end {
+                    cur_column.end =
+                        std::cmp::min(cur_column.end, new_column.start);
+                    // Wins of current belongs to new too
+                    cur_column.increase_wins_columns();
                     // Place after
                     place_to = Some(i + 1);
                     break;
                 }
                 // New is subcolumn of current
-                if c.start < column.start && column.end > c.end {
-                    c.end = column.start;
+                if cur_column.start < new_column.start
+                    && new_column.end > cur_column.end
+                {
+                    cur_column.end = new_column.start;
+                    // Wins of current belongs to new too
+                    cur_column.increase_wins_columns();
                     // Place after
                     place_to = Some(i + 1);
                     break;
                 }
                 // Current is subcolumn of new
-                if column.start < c.start && c.end > column.end {
-                    column.end = c.start;
+                if new_column.start < cur_column.start
+                    && cur_column.end > new_column.end
+                {
+                    new_column.end = cur_column.start;
+                    // Wins of current belongs to new too
+                    new_column.increase_wins_columns();
                     // Place before
                     place_to = Some(i);
                     break;
@@ -178,7 +219,7 @@ impl Vim {
             }
 
             if let Some(place_to) = place_to {
-                columns.insert(place_to, column);
+                columns.insert(place_to, new_column);
             }
         }
         Ok(columns)
@@ -247,6 +288,39 @@ impl Vim {
                 ),
             },
         ))??;
+        self.shift(win, soc)
+    }
+
+    pub fn shift(
+        &mut self,
+        niri_win: &niri_ipc::Window,
+        soc: &mut niri_ipc::socket::Socket,
+    ) -> Result<()> {
+        let mode = get_output_mode_of_window(niri_win, soc)?;
+        let win = self.nvim.get_current_win()?;
+        let pos = win.get_position(&mut self.nvim)?;
+        let start =
+            std::cmp::max(pos.1 - 1, 0) as f64 * self.get_pixels_for_symbol();
+        let end = (pos.1 + win.get_width(&mut self.nvim)?) as f64
+            * self.get_pixels_for_symbol();
+
+        let offset = if (niri_win.view_offset + mode.width as f64) < end {
+            Some(end - (mode.width as f64))
+        } else if niri_win.view_offset > start {
+            Some(start)
+        } else {
+            None
+        };
+
+        if let Some(offset) = offset {
+            soc.send(niri_ipc::Request::Action(
+                niri_ipc::Action::ViewOffset {
+                    id: Some(niri_win.id),
+                    offset,
+                },
+            ))??;
+        }
+
         Ok(())
     }
 
@@ -260,5 +334,50 @@ impl Vim {
         let pix_w = self.get_current_pixel_width();
         println!("Current width: sym {}/ pix {}", sym_w, pix_w);
         Ok(())
+    }
+}
+
+fn get_output_mode_of_window(
+    win: &niri_ipc::Window,
+    soc: &mut niri_ipc::socket::Socket,
+) -> Result<niri_ipc::Mode> {
+    let id = win
+        .workspace_id
+        .ok_or(String::from("Unknown workspace of window"))?;
+    let reply = soc.send(niri_ipc::Request::Workspaces)??;
+    let workspaces = match reply {
+        niri_ipc::Response::Workspaces(workspaces) => Ok(workspaces),
+        _ => Err(String::from("Unexpected response type for Workspaces")),
+    }?;
+    let workspace = workspaces
+        .iter()
+        .find(|ws| ws.id == id)
+        .ok_or(String::from("Can not find workspace of window"))?;
+
+    let outputname = workspace
+        .output
+        .as_ref()
+        .ok_or(String::from("Window atteched to hidden workspace"))?;
+    let reply = soc.send(niri_ipc::Request::Outputs)??;
+    let mut outputs = match reply {
+        niri_ipc::Response::Outputs(outputs) => Ok(outputs),
+        _ => Err(String::from("Unexpected response type for Outputs")),
+    }?;
+    let output = outputs
+        .get_mut(outputname)
+        .ok_or(String::from("Can not find output of window"))?;
+
+    let modeindex = output
+        .current_mode
+        .ok_or(String::from("Window belongs to disabled output"))?;
+
+    if output.modes.len() <= modeindex {
+        Err(Error::from(format!(
+            "Output references to invalid mode: {} of {}",
+            modeindex,
+            output.modes.len()
+        )))
+    } else {
+        Ok(output.modes.swap_remove(modeindex))
     }
 }
