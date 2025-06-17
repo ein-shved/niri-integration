@@ -192,16 +192,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "niri-ipc"
-version = "25.5.1"
-source = "git+https://github.com/ein-shved/niri.git?branch=view_offset#8319f2690d4c0a54668337a8eea42366a7fff55e"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "niri-launcher"
+name = "niri-integration"
 version = "0.1.0"
 dependencies = [
  "clap",
@@ -209,6 +200,15 @@ dependencies = [
  "niri-ipc",
  "nix",
  "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "niri-ipc"
+version = "25.5.1"
+source = "git+https://github.com/ein-shved/niri.git?branch=view_offset#8319f2690d4c0a54668337a8eea42366a7fff55e"
+dependencies = [
  "serde",
  "serde_json",
 ]
