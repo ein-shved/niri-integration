@@ -1,6 +1,6 @@
 {
   description = ''
-    Simple utility to smartly launch different instruments withing niri
+    A glue-utility between niri and environment like kitty and vim
   '';
 
   outputs =
@@ -11,16 +11,16 @@
         pkgs = import nixpkgs {
           inherit system;
         };
-        niri-launcher = pkgs.callPackage ./. { };
+        niri-integration = pkgs.callPackage ./. { };
       in
       {
         packages = {
-          inherit niri-launcher;
-          default = niri-launcher;
+          inherit niri-integration;
+          default = niri-integration;
         };
         formatter = pkgs.nixfmt-rfc-style;
         devShells.default = pkgs.mkShell {
-          inputsFrom = [ niri-launcher ];
+          inputsFrom = [ niri-integration ];
           packages = with pkgs; [
             rust-analyzer
             rustfmt

@@ -2,7 +2,7 @@
   rustPlatform,
 }:
 rustPlatform.buildRustPackage {
-  pname = "niri-launcher";
+  pname = "niri-integration";
   version = "0.1.0";
   src = builtins.path {
     filter = (
