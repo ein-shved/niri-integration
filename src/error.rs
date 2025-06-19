@@ -2,6 +2,7 @@
 
 use neovim_lib;
 use std::{fmt, io};
+use daemonize;
 
 /// Own error type
 ///
@@ -14,6 +15,9 @@ pub enum Error {
     Neovim(neovim_lib::CallError),
     /// A [niri_ipc::Reply] variant
     Str(String),
+    /// A [daemonize::Error] variant
+    Daemonize(daemonize::Error),
+
 }
 
 impl fmt::Display for Error {
@@ -22,6 +26,7 @@ impl fmt::Display for Error {
             Error::Io(ref e) => e.fmt(f),
             Error::Neovim(ref e) => e.fmt(f),
             Error::Str(ref e) => e.fmt(f),
+            Error::Daemonize(ref e) => e.fmt(f),
         }
     }
 }
@@ -33,6 +38,7 @@ impl std::error::Error for Error {
             Error::Io(ref e) => e.description(),
             Error::Neovim(ref e) => e.description(),
             Error::Str(ref e) => &e,
+            Error::Daemonize(ref e) => e.description(),
         }
     }
 }
@@ -67,6 +73,12 @@ impl From<String> for Error {
 impl From<&str> for Error {
     fn from(value: &str) -> Self {
         Self::Str(String::from(value))
+    }
+}
+
+impl From<daemonize::Error> for Error {
+    fn from(value: daemonize::Error) -> Self {
+        Self::Daemonize(value)
     }
 }
 

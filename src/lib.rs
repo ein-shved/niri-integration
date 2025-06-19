@@ -62,6 +62,10 @@ pub struct Launcher {
     /// By default this uses focused window
     #[arg(short, long)]
     window: Option<u64>,
+
+    /// Whether to daemonize process
+    #[arg(short, long, default_value = "false")]
+    daemonize: bool,
 }
 
 /// The list of supported commands
@@ -124,6 +128,13 @@ struct LaunchingData {
 impl Launcher {
     /// Run chosen subcommand
     pub fn run(self) -> Result<()> {
+        if self.daemonize {
+            use daemonize::Stdio;
+            daemonize::Daemonize::new()
+                .stdout(Stdio::keep())
+                .stderr(Stdio::keep())
+                .start()?;
+        }
         let mut socket = if let Some(path) = self.path.as_ref() {
             Socket::connect_to(path)?
         } else {
