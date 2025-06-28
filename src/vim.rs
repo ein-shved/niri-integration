@@ -1,13 +1,10 @@
-use std::{collections::HashMap, default};
-
+use std::collections::HashMap;
 use super::{
+    Direction, Launcher,
     error::{Error, Result},
     pstree::{ProcessTreeNode, build_process_tree},
 };
-use neovim_lib::{
-    Neovim, NeovimApi, Session,
-    neovim_api::{self, Window},
-};
+use neovim_lib::{Neovim, NeovimApi, Session, neovim_api::Window};
 use niri_ipc;
 use nix::unistd;
 
@@ -119,7 +116,8 @@ impl Win {
 
     pub fn is_floating(&mut self, nvim: &mut Neovim) -> bool {
         self.get_config(nvim)
-            .get("relative").cloned()
+            .get("relative")
+            .cloned()
             .unwrap_or(neovim_lib::Value::Nil)
             .as_str()
             .unwrap_or("")
@@ -164,6 +162,8 @@ pub struct Vim {
     nvim: Neovim,
     columns: Vec<WinColumn>,
     column_width_koeff: f64,
+    width: i64,
+    height: i64,
 }
 
 impl Vim {
@@ -174,11 +174,13 @@ impl Vim {
         )?;
         session.start_event_loop();
         let mut nvim = Neovim::new(session);
-        let columns = Self::calculate_columns(&mut nvim)?;
+        let (columns, width, height) = Self::calculate_columns(&mut nvim)?;
         Ok(Self {
             nvim,
             columns,
             column_width_koeff: 1.2,
+            width,
+            height,
         })
     }
 
@@ -200,16 +202,29 @@ impl Vim {
     // This is not very stable function. It attempt to count number of columns of windows in vim.
     // In my work I always split vertically, so this should work for me. But it may not work, when
     // someone splits vim horizontally at first.
-    fn calculate_columns(nvim: &mut Neovim) -> Result<Vec<WinColumn>> {
+    fn calculate_columns(
+        nvim: &mut Neovim,
+    ) -> Result<(Vec<WinColumn>, i64, i64)> {
         let wins = nvim.get_current_tabpage()?.list_wins(nvim)?;
         // Vector of columns. TODO(Shvedov) here should be used LinkedList, but it does not have an
         // insert by iter operation. LikedList now has cursor functionality, which is now available
         // only in nightly.
         let mut columns: Vec<WinColumn> = Vec::new();
+        let (mut width, mut height) = (0, 0);
         columns.reserve(wins.len());
 
         // For each window - create column record and find the place to store it in columns vector.
         for win in wins {
+            width = std::cmp::max(
+                width,
+                win.get_width(nvim).unwrap_or(0)
+                    + win.get_position(nvim).unwrap_or((0, 0)).1,
+            );
+            height = std::cmp::max(
+                height,
+                win.get_height(nvim).unwrap_or(0)
+                    + win.get_position(nvim).unwrap_or((0, 0)).0,
+            );
             let mut new_column = WinColumn::from_window(win, nvim)?;
             if new_column.primary_window_mut().is_floating(nvim) {
                 continue;
@@ -277,7 +292,7 @@ impl Vim {
                 columns.insert(place_to, new_column);
             }
         }
-        Ok(columns)
+        Ok((columns, width, height))
     }
 
     pub fn get_columns(&self) -> &Vec<WinColumn> {
@@ -388,6 +403,68 @@ impl Vim {
         let sym_w = self.get_current_symbol_width();
         let pix_w = self.get_current_pixel_width();
         println!("Current width: sym {}/ pix {}", sym_w, pix_w);
+        Ok(())
+    }
+
+    pub fn switch(
+        &mut self,
+        soc: &mut niri_ipc::socket::Socket,
+        direction: &Direction,
+    ) -> Result<()> {
+        struct Borders {
+            pub top: bool,
+            pub bottom: bool,
+            pub left: bool,
+            pub right: bool,
+        }
+        let win = self.nvim.get_current_win()?;
+        let (row, col) = win.get_position(&mut self.nvim)?;
+        let width = col + win.get_width(&mut self.nvim)?;
+        let height = row + win.get_height(&mut self.nvim)?;
+        let borders = Borders {
+            top: row == 0,
+            bottom: height == self.height,
+            left: col == 0,
+            right: width == self.width,
+        };
+
+        let action = match direction {
+            Direction::Up => {
+                if borders.top {
+                    None
+                } else {
+                    Some("Up")
+                }
+            }
+            Direction::Down => {
+                if borders.bottom {
+                    None
+                } else {
+                    Some("Down")
+                }
+            }
+            Direction::Left => {
+                if borders.left {
+                    None
+                } else {
+                    Some("Left")
+                }
+            }
+            Direction::Right => {
+                if borders.right {
+                    None
+                } else {
+                    Some("Right")
+                }
+            }
+        };
+
+        if let Some(action) = action {
+            self.nvim.input(&format!("<C-w><{}>", action))?;
+        } else {
+            Launcher::switch_niri(soc, direction)?;
+        };
+
         Ok(())
     }
 }

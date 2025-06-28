@@ -97,6 +97,12 @@ pub enum Command {
     /// Vim-related commands.
     #[command(subcommand, about, long_about)]
     Vim(Vim),
+
+    #[command(subcommand, about, long_about)]
+    Switch(Direction),
+
+    #[command(subcommand, about, long_about)]
+    Move(Direction),
 }
 
 #[derive(Subcommand, Debug, Clone, Default)]
@@ -116,6 +122,15 @@ pub enum Vim {
 
     /// Shift vim window if it can not fit screen size
     Shift,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+#[command(about, long_about)]
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 #[derive(Default)]
@@ -140,17 +155,21 @@ impl Launcher {
         } else {
             Socket::connect()?
         };
-        let runner: fn(LaunchingData, &mut Socket) -> Result<()> =
-            match self.command {
-                Command::Test => Self::run_test,
-                Command::Kitty => Self::run_kitty,
-                Command::Env => Self::print_env,
-                Command::Vim(Vim::Run) => Self::run_vim,
-                Command::Vim(Vim::Sync) => Self::sync_vim,
-                Command::Vim(Vim::Shift) => Self::shift_vim,
-            };
-
-        runner(self.get_launching_data(&mut socket), &mut socket)
+        let data = self.get_launching_data(&mut socket);
+        match &self.command {
+            Command::Test => Ok(()),
+            Command::Kitty => Self::run_kitty(data),
+            Command::Env => Self::print_env(data),
+            Command::Vim(Vim::Run) => Self::run_vim(data, &mut socket),
+            Command::Vim(Vim::Sync) => Self::sync_vim(data, &mut socket),
+            Command::Vim(Vim::Shift) => Self::shift_vim(data, &mut socket),
+            Command::Switch(direction) => {
+                self.switch(data, &mut socket, &direction)
+            }
+            Command::Move(direction) => {
+                self.move_window(data, &mut socket, &direction)
+            }
+        }
     }
 
     fn get_socket(&self, pid: i32) -> Result<kitty::KittySocket> {
@@ -259,11 +278,7 @@ impl Launcher {
         Ok(launching_data.maybe_cwd(cwd))
     }
 
-    fn run_test(_: LaunchingData, _: &mut Socket) -> Result<()> {
-        Ok(())
-    }
-
-    fn run_kitty(data: LaunchingData, _: &mut Socket) -> Result<()> {
+    fn run_kitty(data: LaunchingData) -> Result<()> {
         let mut proc = std::process::Command::new("kitty");
 
         data.env.into_iter().fold(&mut proc, |proc, (name, val)| {
@@ -277,7 +292,7 @@ impl Launcher {
         Err(proc.exec().into())
     }
 
-    fn print_env(launching_data: LaunchingData, _: &mut Socket) -> Result<()> {
+    fn print_env(launching_data: LaunchingData) -> Result<()> {
         for (name, val) in launching_data.env {
             println!("{name}=\"{val}\"");
         }
@@ -324,6 +339,45 @@ impl Launcher {
         let mut vim = Self::get_vim(&data)?;
         vim.test()?;
         vim.shift(&data.base_window.unwrap(), soc)
+    }
+
+    fn switch(
+        &self,
+        data: LaunchingData,
+        soc: &mut Socket,
+        direction: &Direction,
+    ) -> Result<()> {
+        let vim = if !self.fresh {
+            Self::get_vim(&data)
+        } else {
+            Err(error::Error::from("Stub"))
+        };
+        if let Ok(mut vim) = vim {
+            vim.switch(soc, direction)?;
+        } else {
+            Self::switch_niri(soc, direction)?;
+        }
+        Ok(())
+    }
+
+    pub fn switch_niri(soc: &mut Socket, direction: &Direction) -> Result<()> {
+        let action = match direction {
+            Direction::Up => niri_ipc::Action::FocusWindowOrWorkspaceUp {},
+            Direction::Down => niri_ipc::Action::FocusWindowOrWorkspaceDown {},
+            Direction::Left => niri_ipc::Action::FocusColumnOrMonitorLeft {},
+            Direction::Right => niri_ipc::Action::FocusColumnOrMonitorRight {},
+        };
+        soc.send(Request::Action(action))??;
+        Ok(())
+    }
+
+    fn move_window(
+        &self,
+        data: LaunchingData,
+        soc: &mut Socket,
+        direction: &Direction,
+    ) -> Result<()> {
+        Ok(())
     }
 
     fn find_kitty_focused_window(
