@@ -1,8 +1,13 @@
+use std::{collections::HashMap, default};
+
 use super::{
     error::{Error, Result},
     pstree::{ProcessTreeNode, build_process_tree},
 };
-use neovim_lib::{Neovim, NeovimApi, Session, neovim_api::Window};
+use neovim_lib::{
+    Neovim, NeovimApi, Session,
+    neovim_api::{self, Window},
+};
 use niri_ipc;
 use nix::unistd;
 
@@ -92,11 +97,16 @@ impl WinColumn {
 pub struct Win {
     pub win: Window,
     num_colums: i64,
+    config: Option<HashMap<String, neovim_lib::Value>>,
 }
 
 impl Win {
     pub fn new(win: Window) -> Self {
-        Self { win, num_colums: 1 }
+        Self {
+            win,
+            num_colums: 1,
+            config: None,
+        }
     }
 
     pub fn add_to_column(&mut self) {
@@ -105,6 +115,48 @@ impl Win {
 
     pub fn get_columns(&self) -> i64 {
         self.num_colums
+    }
+
+    pub fn is_floating(&mut self, nvim: &mut Neovim) -> bool {
+        self.get_config(nvim)
+            .get("relative").cloned()
+            .unwrap_or(neovim_lib::Value::Nil)
+            .as_str()
+            .unwrap_or("")
+            != ""
+    }
+
+    fn get_config(
+        &mut self,
+        nvim: &mut Neovim,
+    ) -> &HashMap<String, neovim_lib::Value> {
+        if self.config.is_none() {
+            self.config = Some(
+                nvim.session
+                    .call(
+                        "nvim_win_get_config",
+                        vec![self.win.get_value().clone()],
+                    )
+                    .map(|value| {
+                        value
+                            .as_map()
+                            .cloned()
+                            .unwrap_or_else(|| Default::default())
+                            .into_iter()
+                            .map(|(k, v)| {
+                                (
+                                    String::from(
+                                        k.as_str().unwrap_or("__invalid"),
+                                    ),
+                                    v.clone(),
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_else(|_| Default::default()),
+            );
+        }
+        self.config.as_ref().unwrap()
     }
 }
 
@@ -159,6 +211,9 @@ impl Vim {
         // For each window - create column record and find the place to store it in columns vector.
         for win in wins {
             let mut new_column = WinColumn::from_window(win, nvim)?;
+            if new_column.primary_window_mut().is_floating(nvim) {
+                continue;
+            }
             let mut place_to = Some(columns.len());
             for (i, cur_column) in columns.iter_mut().enumerate() {
                 // Current last less then new first - go next
