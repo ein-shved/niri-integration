@@ -14,10 +14,9 @@ use error::Result;
 use niri_ipc::{Request, Response, socket::Socket};
 use regex;
 use std::ffi::OsString;
-use std::fs::{File, read_link};
+use std::fs::File;
 use std::io::BufRead;
 use std::str;
-use std::str::FromStr;
 use std::{
     collections::HashMap, io, os::unix::process::CommandExt, path::PathBuf,
 };
@@ -141,10 +140,18 @@ pub struct NiriActionDirection {
 }
 
 #[derive(Default)]
+enum Application {
+    #[default]
+    None,
+    Vim(vim::Vim),
+    Kitty(kitty::KittySocket),
+}
+
+#[derive(Default)]
 struct LaunchingData {
     pub env: HashMap<String, String>,
     pub cwd: Option<String>,
-    pub base_window: Option<niri_ipc::Window>,
+    pub application: Application,
 }
 
 impl Launcher {
@@ -171,15 +178,15 @@ impl Launcher {
             Command::Vim(Vim::Sync) => Self::sync_vim(data, &mut socket),
             Command::Vim(Vim::Shift) => Self::shift_vim(data, &mut socket),
             Command::Switch(direction) => {
-                self.switch(data, &mut socket, &direction)
+                Self::switch(data, &mut socket, &direction)
             }
             Command::Move(direction) => {
-                self.move_window(data, &mut socket, &direction)
+                Self::move_window(data, &mut socket, &direction)
             }
         }
     }
 
-    fn get_socket(&self, pid: i32) -> Result<kitty::KittySocket> {
+    fn get_kitty_socket(&self, pid: i32) -> Result<kitty::KittySocket> {
         let pidre = regex::Regex::new(r"\{pid\}").unwrap();
         let envre = regex::Regex::new(r"\$\{([^\{\}\s]*)\}").unwrap();
 
@@ -205,22 +212,20 @@ impl Launcher {
             io::ErrorKind::NotFound,
             "No focused niri window",
         ))?;
-        let window_c = window.clone();
-        let class = window.app_id.ok_or(io::Error::new(
+        let class = window.app_id.as_ref().ok_or(io::Error::new(
             io::ErrorKind::NotFound,
             "Focused niri window does not have class",
         ))?;
         if class == "kitty" {
-            self.get_launching_data_from_kitty(window.pid)
+            self.get_launching_data_from_kitty(window)
         } else if class == "neovide" {
-            self.get_launching_data_from_vim(window.pid)
+            self.get_launching_data_from_vim(window)
         } else {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 format!("Can not get launching data from {class}"),
             ))?
         }
-        .map(|launching_data| launching_data.set_window(Some(window_c)))
     }
 
     fn get_launching_data(&self, socket: &mut Socket) -> LaunchingData {
@@ -234,32 +239,31 @@ impl Launcher {
 
     fn get_launching_data_from_kitty(
         &self,
-        pid: Option<i32>,
+        niri_window: niri_ipc::Window,
     ) -> Result<LaunchingData> {
-        let pid = pid.ok_or(io::Error::new(
+        let pid = niri_window.pid.ok_or(io::Error::new(
             io::ErrorKind::NotFound,
             "Focused niri window does not have pid",
         ))?;
-        let mut socket = self.get_socket(pid)?;
+        let mut kitty = self.get_kitty_socket(pid)?;
         let r = kitty::Command::Ls(kitty::Ls::default());
-        let r = socket.request(r)?;
+        let r = kitty.request(r)?;
         let windows: Vec<kitty::OsWindow> = serde_json::from_value(r).unwrap();
         let window = Self::find_kitty_focused_window(windows).ok_or(
             io::Error::new(io::ErrorKind::NotFound, "No focused kitty window"),
         )?;
         Ok(LaunchingData::default()
             .maybe_cwd(window.cwd.to_str())
-            .set_envs(window.env.into_iter()))
+            .set_envs(window.env.into_iter())
+            .set_kitty(kitty))
     }
 
     fn get_launching_data_from_vim(
         &self,
-        pid: Option<i32>,
+        window: niri_ipc::Window,
     ) -> Result<LaunchingData> {
-        let pid = pid.ok_or(io::Error::new(
-            io::ErrorKind::NotFound,
-            "Focused niri window does not have pid",
-        ))?;
+        let mut vim = vim::Vim::new(window)?;
+        let pid = vim.get_pid()?;
         let environ = File::open(format!("/proc/{pid}/environ"))?;
         let lines = io::BufReader::new(environ).split(0x0);
         let launching_data =
@@ -278,11 +282,7 @@ impl Launcher {
                     launching_data
                 }
             });
-        let Ok(cwd) = PathBuf::from_str(&format!("/proc/{pid}/cwd"));
-        let cwd = read_link(&cwd)
-            .ok()
-            .map(|cwd| String::from(cwd.to_str().unwrap()));
-        Ok(launching_data.maybe_cwd(cwd))
+        Ok(launching_data.maybe_cwd(vim.get_cwd().ok()).set_vim(vim))
     }
 
     fn run_kitty(data: LaunchingData) -> Result<()> {
@@ -320,50 +320,31 @@ impl Launcher {
         Err(proc.exec().into())
     }
 
-    fn get_vim(data: &LaunchingData) -> Result<vim::Vim> {
-        vim::Vim::new(
-            data.base_window
-                .as_ref()
-                .ok_or(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "No window provided",
-                ))?
-                .pid
-                .ok_or(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Unknown pid of window",
-                ))?,
-        )
+    fn sync_vim(mut data: LaunchingData, soc: &mut Socket) -> Result<()> {
+        if let Some(ref mut vim) = data.get_vim() {
+            vim.test()?;
+            vim.sync_width(soc)?
+        };
+        Ok(())
     }
 
-    fn sync_vim(data: LaunchingData, soc: &mut Socket) -> Result<()> {
-        let mut vim = Self::get_vim(&data)?;
-        vim.test()?;
-        vim.sync_width(&data.base_window.unwrap(), soc)
-    }
-
-    fn shift_vim(data: LaunchingData, soc: &mut Socket) -> Result<()> {
-        let mut vim = Self::get_vim(&data)?;
-        vim.test()?;
-        vim.shift(&data.base_window.unwrap(), soc)
+    fn shift_vim(mut data: LaunchingData, soc: &mut Socket) -> Result<()> {
+        if let Some(ref mut vim) = data.get_vim() {
+            vim.test()?;
+            vim.shift(soc)?
+        };
+        Ok(())
     }
 
     fn switch(
-        &self,
-        data: LaunchingData,
+        mut data: LaunchingData,
         soc: &mut Socket,
         direction: &Direction,
     ) -> Result<()> {
-        let vim = if !self.fresh {
-            Self::get_vim(&data)
-        } else {
-            Err(error::Error::from("Stub"))
-        };
-        if let Ok(mut vim) = vim {
+        if let Some(ref mut vim) = data.get_vim() {
             vim.switch(soc, direction)?;
         } else {
             Self::switch_niri(soc, direction)?;
-
         }
         Ok(())
     }
@@ -374,17 +355,11 @@ impl Launcher {
     }
 
     fn move_window(
-        &self,
-        data: LaunchingData,
+        mut data: LaunchingData,
         soc: &mut Socket,
         direction: &Direction,
     ) -> Result<()> {
-        let vim = if !self.fresh {
-            Self::get_vim(&data)
-        } else {
-            Err(error::Error::from("Stub"))
-        };
-        if let Ok(mut vim) = vim {
+        if let Some(ref mut vim) = data.get_vim() {
             vim.move_window(soc, direction)?;
         } else {
             Self::move_niri(soc, direction)?;
@@ -504,9 +479,30 @@ impl LaunchingData {
         self.clear_env().add_envs(it)
     }
 
-    pub fn set_window(mut self, window: Option<niri_ipc::Window>) -> Self {
-        self.base_window = window;
+    pub fn set_vim(mut self, vim: vim::Vim) -> Self {
+        self.application = Application::Vim(vim);
         self
+    }
+
+    pub fn get_vim(&mut self) -> Option<&mut vim::Vim> {
+        if let Application::Vim(ref mut vim) = self.application {
+            Some(vim)
+        } else {
+            None
+        }
+    }
+
+    pub fn set_kitty(mut self, kitty: kitty::KittySocket) -> Self {
+        self.application = Application::Kitty(kitty);
+        self
+    }
+
+    pub fn get_kitty(&mut self) -> Option<&mut kitty::KittySocket> {
+        if let Application::Kitty(ref mut kitty) = self.application {
+            Some(kitty)
+        } else {
+            None
+        }
     }
 }
 

@@ -5,7 +5,7 @@ use super::{
 };
 use neovim_lib::{Neovim, NeovimApi, Session, neovim_api::Window};
 use niri_ipc;
-use nix::{libc::acct, unistd};
+use nix::unistd;
 use std::collections::HashMap;
 
 pub struct WinColumn {
@@ -164,13 +164,14 @@ pub struct Vim {
     column_width_koeff: f64,
     width: i64,
     height: i64,
+    niri_window: niri_ipc::Window,
 }
 
 impl Vim {
-    pub fn new(pid: i32) -> Result<Self> {
+    pub fn new(niri_window: niri_ipc::Window) -> Result<Self> {
         let mut session = Self::try_session_from(
             &unistd::geteuid(),
-            &build_process_tree(Some(pid))?.root,
+            &build_process_tree(niri_window.pid)?.root,
         )?;
         session.start_event_loop();
         let mut nvim = Neovim::new(session);
@@ -181,6 +182,7 @@ impl Vim {
             column_width_koeff: 1.2,
             width,
             height,
+            niri_window,
         })
     }
 
@@ -347,26 +349,21 @@ impl Vim {
 
     pub fn sync_width(
         &mut self,
-        win: &niri_ipc::Window,
         soc: &mut niri_ipc::socket::Socket,
     ) -> Result<()> {
         soc.send(niri_ipc::Request::Action(
             niri_ipc::Action::SetWindowWidth {
-                id: Some(win.id),
+                id: Some(self.niri_window.id),
                 change: niri_ipc::SizeChange::SetFixed(
                     self.get_desired_pixel_width() as i32,
                 ),
             },
         ))??;
-        self.shift(win, soc)
+        self.shift(soc)
     }
 
-    pub fn shift(
-        &mut self,
-        niri_win: &niri_ipc::Window,
-        soc: &mut niri_ipc::socket::Socket,
-    ) -> Result<()> {
-        let mode = get_output_mode_of_window(niri_win, soc)?;
+    pub fn shift(&mut self, soc: &mut niri_ipc::socket::Socket) -> Result<()> {
+        let mode = get_output_mode_of_window(&self.niri_window, soc)?;
         let win = self.nvim.get_current_win()?;
         let pos = win.get_position(&mut self.nvim)?;
         let start =
@@ -374,9 +371,10 @@ impl Vim {
         let end = (pos.1 + win.get_width(&mut self.nvim)?) as f64
             * self.get_pixels_for_symbol();
 
-        let offset = if (niri_win.view_offset + mode.width as f64) < end {
+        let offset = if (self.niri_window.view_offset + mode.width as f64) < end
+        {
             Some(end - (mode.width as f64))
-        } else if niri_win.view_offset > start {
+        } else if self.niri_window.view_offset > start {
             Some(start)
         } else {
             None
@@ -385,7 +383,7 @@ impl Vim {
         if let Some(offset) = offset {
             soc.send(niri_ipc::Request::Action(
                 niri_ipc::Action::ViewOffset {
-                    id: Some(niri_win.id),
+                    id: Some(self.niri_window.id),
                     offset,
                 },
             ))??;
@@ -459,6 +457,7 @@ impl Vim {
         };
         Ok(action)
     }
+
     pub fn switch(
         &mut self,
         soc: &mut niri_ipc::socket::Socket,
@@ -497,11 +496,24 @@ impl Vim {
         Ok(())
     }
 
-    fn send_window_input(&mut self, key:&str) -> Result<()>
-    {
+    fn send_window_input(&mut self, key: &str) -> Result<()> {
         let cmd = format!("<Esc><C-w>{}", key);
         self.nvim.input(&cmd)?;
         Ok(())
+    }
+
+    pub fn get_cwd(&mut self) -> Result<String> {
+        Ok(self.nvim.command_output("pwd")?.as_str().into())
+    }
+
+    pub fn get_pid(&mut self) -> Result<i32> {
+        self.nvim
+            .call_function("getpid", Default::default())?
+            .as_i64()
+            .ok_or_else(|| {
+                crate::error::Error::from("Can not get valid pid from vim")
+            })
+            .map(|v| v as i32)
     }
 }
 
