@@ -496,6 +496,21 @@ impl Vim {
         Ok(())
     }
 
+    pub fn close_window(
+        &mut self,
+        force: bool,
+        soc: &mut niri_ipc::socket::Socket,
+    ) -> Result<()> {
+        self.nvim
+            .session
+            .call("nvim_win_close", vec![0.into(), force.into()])
+            .map_err(
+                // TODO(Shvedov): Should show the error message to vim
+                |e| e.to_string(),
+            )?;
+        self.sync_width(soc)
+    }
+
     fn send_window_input(&mut self, key: &str) -> Result<()> {
         let cmd = format!("<Esc><C-w>{}", key);
         self.nvim.input(&cmd)?;

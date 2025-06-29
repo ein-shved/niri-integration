@@ -102,6 +102,9 @@ pub enum Command {
 
     #[command(subcommand, about, long_about)]
     Move(Direction),
+
+    #[command(about, long_about)]
+    Close,
 }
 
 #[derive(Subcommand, Debug, Clone, Default)]
@@ -183,6 +186,7 @@ impl Launcher {
             Command::Move(direction) => {
                 Self::move_window(data, &mut socket, &direction)
             }
+            Command::Close => Self::close(data, &mut socket),
         }
     }
 
@@ -363,6 +367,20 @@ impl Launcher {
             vim.move_window(soc, direction)?;
         } else {
             Self::move_niri(soc, direction)?;
+        }
+        Ok(())
+    }
+
+    fn close(
+        mut data: LaunchingData,
+        soc: &mut Socket,
+    ) -> Result<()> {
+        if let Some(ref mut vim) = data.get_vim() {
+            vim.close_window(false, soc)?;
+        } else {
+            soc.send(niri_ipc::Request::Action(
+                niri_ipc::Action::CloseWindow { id: None },
+            ))??;
         }
         Ok(())
     }
