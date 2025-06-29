@@ -133,6 +133,13 @@ pub enum Direction {
     Right,
 }
 
+pub struct NiriActionDirection {
+    up: niri_ipc::Action,
+    down: niri_ipc::Action,
+    left: niri_ipc::Action,
+    right: niri_ipc::Action,
+}
+
 #[derive(Default)]
 struct LaunchingData {
     pub env: HashMap<String, String>,
@@ -356,18 +363,13 @@ impl Launcher {
             vim.switch(soc, direction)?;
         } else {
             Self::switch_niri(soc, direction)?;
+
         }
         Ok(())
     }
 
     pub fn switch_niri(soc: &mut Socket, direction: &Direction) -> Result<()> {
-        let action = match direction {
-            Direction::Up => niri_ipc::Action::FocusWindowOrWorkspaceUp {},
-            Direction::Down => niri_ipc::Action::FocusWindowOrWorkspaceDown {},
-            Direction::Left => niri_ipc::Action::FocusColumnOrMonitorLeft {},
-            Direction::Right => niri_ipc::Action::FocusColumnOrMonitorRight {},
-        };
-        soc.send(Request::Action(action))??;
+        soc.send(NiriActionDirection::new_focus().mk_request(direction))??;
         Ok(())
     }
 
@@ -377,6 +379,21 @@ impl Launcher {
         soc: &mut Socket,
         direction: &Direction,
     ) -> Result<()> {
+        let vim = if !self.fresh {
+            Self::get_vim(&data)
+        } else {
+            Err(error::Error::from("Stub"))
+        };
+        if let Ok(mut vim) = vim {
+            vim.move_window(soc, direction)?;
+        } else {
+            Self::move_niri(soc, direction)?;
+        }
+        Ok(())
+    }
+
+    pub fn move_niri(soc: &mut Socket, direction: &Direction) -> Result<()> {
+        soc.send(NiriActionDirection::new_move().mk_request(direction))??;
         Ok(())
     }
 
@@ -490,5 +507,38 @@ impl LaunchingData {
     pub fn set_window(mut self, window: Option<niri_ipc::Window>) -> Self {
         self.base_window = window;
         self
+    }
+}
+
+impl NiriActionDirection {
+    pub fn new_focus() -> Self {
+        Self {
+            up: niri_ipc::Action::FocusWindowOrWorkspaceUp {},
+            down: niri_ipc::Action::FocusWindowOrWorkspaceDown {},
+            left: niri_ipc::Action::FocusColumnOrMonitorLeft {},
+            right: niri_ipc::Action::FocusColumnOrMonitorRight {},
+        }
+    }
+
+    pub fn new_move() -> Self {
+        Self {
+            up: niri_ipc::Action::MoveWindowUpOrToWorkspaceUp {},
+            down: niri_ipc::Action::MoveWindowDownOrToWorkspaceDown {},
+            left: niri_ipc::Action::MoveColumnLeftOrToMonitorLeft {},
+            right: niri_ipc::Action::MoveColumnRightOrToMonitorRight {},
+        }
+    }
+
+    pub fn mk_action(self, direction: &Direction) -> niri_ipc::Action {
+        match direction {
+            Direction::Up => self.up,
+            Direction::Down => self.down,
+            Direction::Left => self.left,
+            Direction::Right => self.right,
+        }
+    }
+
+    pub fn mk_request(self, direction: &Direction) -> niri_ipc::Request {
+        niri_ipc::Request::Action(self.mk_action(direction))
     }
 }

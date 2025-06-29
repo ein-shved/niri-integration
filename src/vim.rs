@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use super::{
     Direction, Launcher,
     error::{Error, Result},
@@ -6,7 +5,8 @@ use super::{
 };
 use neovim_lib::{Neovim, NeovimApi, Session, neovim_api::Window};
 use niri_ipc;
-use nix::unistd;
+use nix::{libc::acct, unistd};
+use std::collections::HashMap;
 
 pub struct WinColumn {
     pub start: i64,
@@ -406,11 +406,10 @@ impl Vim {
         Ok(())
     }
 
-    pub fn switch(
+    fn get_vim_cmd_direction(
         &mut self,
-        soc: &mut niri_ipc::socket::Socket,
         direction: &Direction,
-    ) -> Result<()> {
+    ) -> Result<Option<&'static str>> {
         struct Borders {
             pub top: bool,
             pub bottom: bool,
@@ -458,13 +457,50 @@ impl Vim {
                 }
             }
         };
-
-        if let Some(action) = action {
-            self.nvim.input(&format!("<C-w><{}>", action))?;
+        Ok(action)
+    }
+    pub fn switch(
+        &mut self,
+        soc: &mut niri_ipc::socket::Socket,
+        direction: &Direction,
+    ) -> Result<()> {
+        if let Some(action) = self.get_vim_cmd_direction(direction)? {
+            self.send_window_input(&format!("<{}>", action))?;
         } else {
             Launcher::switch_niri(soc, direction)?;
         };
+        Ok(())
+    }
 
+    pub fn move_window(
+        &mut self,
+        soc: &mut niri_ipc::socket::Socket,
+        direction: &Direction,
+    ) -> Result<()> {
+        let rotation =
+            if let Some(action) = self.get_vim_cmd_direction(direction)? {
+                if action == "Up" || action == "Left" {
+                    Some("R")
+                } else if action == "Right" || action == "Down" {
+                    Some("r")
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+        if let Some(rotation) = rotation {
+            self.send_window_input(rotation)?;
+        } else {
+            Launcher::move_niri(soc, direction)?;
+        }
+        Ok(())
+    }
+
+    fn send_window_input(&mut self, key:&str) -> Result<()>
+    {
+        let cmd = format!("<Esc><C-w>{}", key);
+        self.nvim.input(&cmd)?;
         Ok(())
     }
 }
