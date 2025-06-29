@@ -511,6 +511,32 @@ impl Vim {
         self.sync_width(soc)
     }
 
+    pub fn run(
+        &mut self,
+        focus: bool,
+        soc: &mut niri_ipc::socket::Socket,
+    ) -> Result<()> {
+        self.nvim
+            .session
+            .call(
+                "nvim_open_win",
+                vec![
+                    0.into(),
+                    focus.into(),
+                    (vec![
+                        ("split".into(), "left".into()),
+                        ("win".into(), 0.into()),
+                    ])
+                    .into(),
+                ],
+            )
+            .map_err(
+                // TODO(Shvedov): Should show the error message to vim
+                |e| e.to_string(),
+            )?;
+        self.sync_width(soc)
+    }
+
     fn send_window_input(&mut self, key: &str) -> Result<()> {
         let cmd = format!("<Esc><C-w>{}", key);
         self.nvim.input(&cmd)?;

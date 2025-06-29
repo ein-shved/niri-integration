@@ -310,18 +310,21 @@ impl Launcher {
         Ok(())
     }
 
-    fn run_vim(data: LaunchingData, _: &mut Socket) -> Result<()> {
-        let mut proc = std::process::Command::new("neovide");
+    fn run_vim(mut data: LaunchingData, soc: &mut Socket) -> Result<()> {
+        if let Some(ref mut vim) = data.get_vim() {
+            vim.run(true, soc)
+        } else {
+            let mut proc = std::process::Command::new("neovide");
 
-        data.env
-            .into_iter()
-            .fold(&mut proc, |proc, (name, val)| proc.env(name, val));
+            data.env
+                .into_iter()
+                .fold(&mut proc, |proc, (name, val)| proc.env(name, val));
 
-        data.cwd.map(|workdir| {
-            proc.current_dir(workdir);
-        });
-
-        Err(proc.exec().into())
+            data.cwd.map(|workdir| {
+                proc.current_dir(workdir);
+            });
+            Err(proc.exec())?
+        }
     }
 
     fn sync_vim(mut data: LaunchingData, soc: &mut Socket) -> Result<()> {
@@ -371,10 +374,7 @@ impl Launcher {
         Ok(())
     }
 
-    fn close(
-        mut data: LaunchingData,
-        soc: &mut Socket,
-    ) -> Result<()> {
+    fn close(mut data: LaunchingData, soc: &mut Socket) -> Result<()> {
         if let Some(ref mut vim) = data.get_vim() {
             vim.close_window(false, soc)?;
         } else {
