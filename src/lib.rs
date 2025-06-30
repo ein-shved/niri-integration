@@ -175,7 +175,7 @@ impl Launcher {
         let data = self.get_launching_data(&mut socket);
         match &self.command {
             Command::Test => Ok(()),
-            Command::Kitty => Self::run_kitty(data),
+            Command::Kitty => self.run_kitty(data, &mut socket),
             Command::Env => Self::print_env(data),
             Command::Vim(Vim::Run) => Self::run_vim(data, &mut socket),
             Command::Vim(Vim::Sync) => Self::sync_vim(data, &mut socket),
@@ -221,7 +221,7 @@ impl Launcher {
             "Focused niri window does not have class",
         ))?;
         if class == "kitty" {
-            self.get_launching_data_from_kitty(window)
+            self.get_launching_data_from_kitty(&window)
         } else if class == "neovide" {
             self.get_launching_data_from_vim(window)
         } else {
@@ -243,7 +243,7 @@ impl Launcher {
 
     fn get_launching_data_from_kitty(
         &self,
-        niri_window: niri_ipc::Window,
+        niri_window: &niri_ipc::Window,
     ) -> Result<LaunchingData> {
         let pid = niri_window.pid.ok_or(io::Error::new(
             io::ErrorKind::NotFound,
@@ -289,18 +289,123 @@ impl Launcher {
         Ok(launching_data.maybe_cwd(vim.get_cwd().ok()).set_vim(vim))
     }
 
-    fn run_kitty(data: LaunchingData) -> Result<()> {
-        let mut proc = std::process::Command::new("kitty");
+    fn run_kitty(&self, data: LaunchingData, soc: &mut Socket) -> Result<()> {
+        if let Some(window) = self.find_kitty_for(&data, soc).unwrap_or(None) {
+            soc.send(niri_ipc::Request::Action(
+                niri_ipc::Action::FocusWindow { id: window.id },
+            ))??;
+        } else {
+            let mut proc = std::process::Command::new("kitty");
 
-        data.env.into_iter().fold(&mut proc, |proc, (name, val)| {
-            proc.arg("-o").arg(format!("env={name}={val}"))
+            data.env.into_iter().fold(&mut proc, |proc, (name, val)| {
+                proc.arg("-o").arg(format!("env={name}={val}"))
+            });
+
+            data.cwd.map(|workdir| {
+                proc.arg("-d").arg(format!("{}", workdir));
+            });
+
+            Err(proc.exec())?;
+        }
+        Ok(())
+    }
+
+    fn find_kitty_for(
+        &self,
+        data: &LaunchingData,
+        soc: &mut Socket,
+    ) -> Result<Option<niri_ipc::Window>> {
+        if let Application::Kitty(_) = data.application {
+            return Ok(None);
+        }
+
+        let ws = soc.send(niri_ipc::Request::Workspaces)??;
+        let ws = match ws {
+            niri_ipc::Response::Workspaces(ws) => Some(ws),
+            _ => None,
+        };
+
+        if ws.is_none() {
+            return Ok(None);
+        }
+        let ws = ws.unwrap();
+        let ws = ws.iter().fold(None, |cur, ws| {
+            if cur.is_some() {
+                cur
+            } else if ws.is_active {
+                Some(ws)
+            } else {
+                None
+            }
         });
+        if ws.is_none() {
+            return Ok(None);
+        }
+        let ws = ws.unwrap().id;
 
-        data.cwd.map(|workdir| {
-            proc.arg("-d").arg(format!("{}", workdir));
+        let wins = soc.send(niri_ipc::Request::Windows)??;
+        let wins = match wins {
+            niri_ipc::Response::Windows(wins) => Some(wins),
+            _ => None,
+        };
+        if wins.is_none() {
+            return Ok(None);
+        }
+        let wins = wins.unwrap();
+        let win = wins.into_iter().fold(None, |cur, win| {
+            if cur.is_some() {
+                cur
+            } else if win.workspace_id.is_none()
+                || win.workspace_id.unwrap() != ws
+            {
+                None
+            } else if self.is_kitty_matches(&win, data).unwrap_or(false) {
+                Some(win)
+            } else {
+                None
+            }
         });
+        Ok(win)
+    }
 
-        Err(proc.exec().into())
+    fn is_kitty_matches(
+        &self,
+        win: &niri_ipc::Window,
+        data: &LaunchingData,
+    ) -> Result<bool> {
+        if win.app_id != Some("kitty".into()) {
+            return Ok(false);
+        }
+        if win.is_focused {
+            return Ok(false);
+        }
+
+        if data.cwd.is_none() {
+            return Ok(false);
+        }
+        let cwd = data.cwd.as_ref().unwrap();
+
+        let pid = win.pid.ok_or(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Focused niri window does not have pid",
+        ))?;
+        let mut kitty = self.get_kitty_socket(pid)?;
+        let r = kitty::Command::Ls(kitty::Ls::default());
+        let r = kitty.request(r)?;
+        let windows: Vec<kitty::OsWindow> = serde_json::from_value(r)?;
+
+        for window in windows {
+            for tab in window.tabs {
+                for window in tab.windows {
+                    if let Some(cwd2) = window.cwd.to_str() {
+                        if cwd == cwd2 {
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(false)
     }
 
     fn print_env(launching_data: LaunchingData) -> Result<()> {

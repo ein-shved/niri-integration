@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::io::{prelude::*, BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, prelude::*};
 use std::{
     collections, io,
     os::unix::net::UnixStream,
