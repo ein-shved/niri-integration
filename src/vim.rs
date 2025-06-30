@@ -534,6 +534,7 @@ impl Vim {
                 // TODO(Shvedov): Should show the error message to vim
                 |e| e.to_string(),
             )?;
+        self.nvim.command("Ex")?;
         self.sync_width(soc)
     }
 
