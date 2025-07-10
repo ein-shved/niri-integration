@@ -3,6 +3,7 @@
 use neovim_lib;
 use std::{fmt, io};
 use daemonize;
+use serde_json;
 
 /// Own error type
 ///
@@ -17,6 +18,8 @@ pub enum Error {
     Str(String),
     /// A [daemonize::Error] variant
     Daemonize(daemonize::Error),
+    /// A [serde_json::Error]
+    Json(serde_json::Error),
 
 }
 
@@ -27,6 +30,7 @@ impl fmt::Display for Error {
             Error::Neovim(ref e) => e.fmt(f),
             Error::Str(ref e) => e.fmt(f),
             Error::Daemonize(ref e) => e.fmt(f),
+            Error::Json(ref e) => e.fmt(f),
         }
     }
 }
@@ -39,6 +43,7 @@ impl std::error::Error for Error {
             Error::Neovim(ref e) => e.description(),
             Error::Str(ref e) => &e,
             Error::Daemonize(ref e) => e.description(),
+            Error::Json(ref e) => e.description(),
         }
     }
 }
@@ -79,6 +84,12 @@ impl From<&str> for Error {
 impl From<daemonize::Error> for Error {
     fn from(value: daemonize::Error) -> Self {
         Self::Daemonize(value)
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Json(value)
     }
 }
 
