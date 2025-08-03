@@ -14,6 +14,7 @@ use error::Result;
 use niri_ipc::{Request, Response, socket::Socket};
 use regex;
 use std::ffi::OsString;
+use std::fmt::Display;
 use std::fs::File;
 use std::io::BufRead;
 use std::str;
@@ -659,5 +660,23 @@ impl NiriActionDirection {
 
     pub fn mk_request(self, direction: &Direction) -> niri_ipc::Request {
         niri_ipc::Request::Action(self.mk_action(direction))
+    }
+}
+
+impl Display for Direction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_str())
+    }
+}
+
+impl Direction {
+    fn to_str(&self) -> &'static str
+    {
+        match self {
+            Direction::Up => "Up",
+            Direction::Down => "Down",
+            Direction::Left => "Left",
+            Direction::Right => "Right",
+        }
     }
 }

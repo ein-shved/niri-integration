@@ -404,10 +404,11 @@ impl Vim {
         Ok(())
     }
 
-    fn get_vim_cmd_direction(
-        &mut self,
-        direction: &Direction,
-    ) -> Result<Option<&'static str>> {
+    fn get_vim_cmd_direction<'a, 'b>(
+        &'a mut self,
+        direction: &'b Direction,
+    ) -> Result<Option<&'b Direction>> {
+        #[derive(Debug)]
         struct Borders {
             pub top: bool,
             pub bottom: bool,
@@ -425,37 +426,13 @@ impl Vim {
             right: width == self.width,
         };
 
-        let action = match direction {
-            Direction::Up => {
-                if borders.top {
-                    None
-                } else {
-                    Some("Up")
-                }
-            }
-            Direction::Down => {
-                if borders.bottom {
-                    None
-                } else {
-                    Some("Down")
-                }
-            }
-            Direction::Left => {
-                if borders.left {
-                    None
-                } else {
-                    Some("Left")
-                }
-            }
-            Direction::Right => {
-                if borders.right {
-                    None
-                } else {
-                    Some("Right")
-                }
-            }
+        let at_border = match direction {
+            Direction::Up => borders.top,
+            Direction::Down => borders.bottom,
+            Direction::Left => borders.left,
+            Direction::Right => borders.right,
         };
-        Ok(action)
+        Ok(if !at_border { Some(direction) } else { None })
     }
 
     pub fn switch(
@@ -464,7 +441,7 @@ impl Vim {
         direction: &Direction,
     ) -> Result<()> {
         if let Some(action) = self.get_vim_cmd_direction(direction)? {
-            self.send_window_input(&format!("<{}>", action))?;
+            self.send_window_input([ &*format!("<{}>", action) ].iter())?;
         } else {
             Launcher::switch_niri(soc, direction)?;
         };
@@ -478,13 +455,12 @@ impl Vim {
     ) -> Result<()> {
         let rotation =
             if let Some(action) = self.get_vim_cmd_direction(direction)? {
-                if action == "Up" || action == "Left" {
-                    Some("R")
-                } else if action == "Right" || action == "Down" {
-                    Some("r")
-                } else {
-                    None
-                }
+                Some(match action {
+                    Direction::Up => [ "R" ].iter(),
+                    Direction::Down => [ "r" ].iter(),
+                    Direction::Left => [ "<Left>", "x" ].iter(),
+                    Direction::Right => ["x", "<Right>"].iter(),
+                })
             } else {
                 None
             };
@@ -538,9 +514,11 @@ impl Vim {
         self.sync_width(soc)
     }
 
-    fn send_window_input(&mut self, key: &str) -> Result<()> {
-        let cmd = format!("<Esc><C-w>{}", key);
-        self.nvim.input(&cmd)?;
+    fn send_window_input<'a, I: IntoIterator<Item = &'a &'a str>>(&mut self, keys: I) -> Result<()> {
+        for key in keys.into_iter() {
+            let cmd = format!("<Esc><C-w>{}", key);
+            self.nvim.input(&cmd)?;
+        }
         Ok(())
     }
 
