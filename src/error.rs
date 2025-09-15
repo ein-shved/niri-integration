@@ -4,6 +4,7 @@ use neovim_lib;
 use std::{fmt, io};
 use daemonize;
 use serde_json;
+use regex;
 
 /// Own error type
 ///
@@ -20,6 +21,8 @@ pub enum Error {
     Daemonize(daemonize::Error),
     /// A [serde_json::Error]
     Json(serde_json::Error),
+    /// A [regex::Error]
+    Regex(regex::Error)
 
 }
 
@@ -31,6 +34,7 @@ impl fmt::Display for Error {
             Error::Str(ref e) => e.fmt(f),
             Error::Daemonize(ref e) => e.fmt(f),
             Error::Json(ref e) => e.fmt(f),
+            Error::Regex(ref e) => e.fmt(f),
         }
     }
 }
@@ -44,6 +48,7 @@ impl std::error::Error for Error {
             Error::Str(ref e) => &e,
             Error::Daemonize(ref e) => e.description(),
             Error::Json(ref e) => e.description(),
+            Error::Regex(ref e) => e.description(),
         }
     }
 }
@@ -90,6 +95,12 @@ impl From<daemonize::Error> for Error {
 impl From<serde_json::Error> for Error {
     fn from(value: serde_json::Error) -> Self {
         Self::Json(value)
+    }
+}
+
+impl From<regex::Error> for Error {
+    fn from(value: regex::Error) -> Self {
+        Self::Regex(value)
     }
 }
 

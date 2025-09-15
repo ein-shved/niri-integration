@@ -6,7 +6,7 @@ use super::{
 use neovim_lib::{Neovim, NeovimApi, Session, neovim_api::Window};
 use niri_ipc;
 use nix::unistd;
-use std::collections::HashMap;
+use std::{collections::HashMap, num::ParseIntError};
 
 pub struct WinColumn {
     pub start: i64,
@@ -165,6 +165,7 @@ pub struct Vim {
     width: i64,
     height: i64,
     niri_window: niri_ipc::Window,
+    font_size: i32,
 }
 
 impl Vim {
@@ -176,14 +177,61 @@ impl Vim {
         session.start_event_loop();
         let mut nvim = Neovim::new(session);
         let (columns, width, height) = Self::calculate_columns(&mut nvim)?;
+        let font_size = Self::get_font_size(&mut nvim).unwrap_or(10);
         Ok(Self {
             nvim,
             columns,
-            column_width_koeff: 1.2,
+            column_width_koeff : 1.2,
             width,
             height,
             niri_window,
+            font_size,
         })
+    }
+
+    fn get_font(nvim: &mut Neovim) -> Result<String> {
+        let res = nvim
+            .session
+            .call(
+                "nvim_exec2",
+                vec![
+                    "set guifont".into(),
+                    (vec![("output".into(), true.into())]).into(),
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        let res = res
+            .as_map()
+            .ok_or(Error::Str("Unexpected result of nvim_exec2 call".into()))?;
+        for (k, v) in res {
+            let k = k
+                .as_str()
+                .ok_or(Error::Str("Invalid key type of nvim value".into()))?;
+            if k == "output" {
+                let v = v.as_str().ok_or(Error::Str(
+                    "Invalid type of output field of nvim_exec2 call".into(),
+                ))?;
+                return Ok(v.into());
+            }
+        }
+        Err(Error::Str(
+            "Call to nvim_exec2 does not contains output".into(),
+        ))
+    }
+
+    fn get_font_size(nvim: &mut Neovim) -> Result<i32> {
+        let font = Self::get_font(nvim)?;
+        let re = regex::Regex::new(r":h(\d+)$")?;
+        let match_err =
+            format!("Can not find size component of font in '{font}'");
+        let h = re
+            .captures(&font)
+            .ok_or(Error::Str(match_err.clone()))?
+            .get(1)
+            .ok_or(Error::Str(match_err.clone()))?;
+        Ok(h.as_str()
+            .parse()
+            .map_err(|e: ParseIntError| e.to_string())?)
     }
 
     fn try_session_from(
@@ -311,7 +359,7 @@ impl Vim {
 
     pub fn get_pixels_for_symbol(&self) -> f64 {
         // TODO(Shvedov): calculate correctly
-        8.0093
+        self.font_size as f64 * 0.80093
     }
 
     pub fn set_column_width_koeff(&mut self, koef: f64) {
@@ -441,7 +489,7 @@ impl Vim {
         direction: &Direction,
     ) -> Result<()> {
         if let Some(action) = self.get_vim_cmd_direction(direction)? {
-            self.send_window_input([ &*format!("<{}>", action) ].iter())?;
+            self.send_window_input([&*format!("<{}>", action)].iter())?;
         } else {
             Launcher::switch_niri(soc, direction)?;
         };
@@ -456,9 +504,9 @@ impl Vim {
         let rotation =
             if let Some(action) = self.get_vim_cmd_direction(direction)? {
                 Some(match action {
-                    Direction::Up => [ "R" ].iter(),
-                    Direction::Down => [ "r" ].iter(),
-                    Direction::Left => [ "<Left>", "x" ].iter(),
+                    Direction::Up => ["R"].iter(),
+                    Direction::Down => ["r"].iter(),
+                    Direction::Left => ["<Left>", "x"].iter(),
                     Direction::Right => ["x", "<Right>"].iter(),
                 })
             } else {
@@ -514,7 +562,10 @@ impl Vim {
         self.sync_width(soc)
     }
 
-    fn send_window_input<'a, I: IntoIterator<Item = &'a &'a str>>(&mut self, keys: I) -> Result<()> {
+    fn send_window_input<'a, I: IntoIterator<Item = &'a &'a str>>(
+        &mut self,
+        keys: I,
+    ) -> Result<()> {
         for key in keys.into_iter() {
             let cmd = format!("<Esc><C-w>{}", key);
             self.nvim.input(&cmd)?;
