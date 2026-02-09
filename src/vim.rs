@@ -265,13 +265,9 @@ impl Vim {
 
         // For each window - create column record and find the place to store it in columns vector.
         for win in wins {
-            width = std::cmp::max(
-                width,
+            let (win_width, win_height) = (
                 win.get_width(nvim).unwrap_or(0)
                     + win.get_position(nvim).unwrap_or((0, 0)).1,
-            );
-            height = std::cmp::max(
-                height,
                 win.get_height(nvim).unwrap_or(0)
                     + win.get_position(nvim).unwrap_or((0, 0)).0,
             );
@@ -279,6 +275,8 @@ impl Vim {
             if new_column.primary_window_mut().is_floating(nvim) {
                 continue;
             }
+            width = std::cmp::max(width, win_width);
+            height = std::cmp::max(height, win_height);
             let mut place_to = Some(columns.len());
             for (i, cur_column) in columns.iter_mut().enumerate() {
                 // Current last less then new first - go next
